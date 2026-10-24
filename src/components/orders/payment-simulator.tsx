@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useRef, useState } from "react";
 
 import type { Payment } from "@/types/order";
 import { formatKRW } from "@/lib/format";
@@ -13,32 +13,96 @@ interface PaymentSimulatorProps {
 
 type PaymentOutcome = "SUCCESS" | "FAILURE";
 
-function paymentStatusClass(status: string) {
+interface ApiErrorResponse {
+  message?: string;
+  detail?: string;
+  error?: string;
+}
+
+function paymentStatusClass(status: string): string {
   switch (status.toUpperCase()) {
     case "PAID":
       return "bg-emerald-50 text-emerald-700";
+
     case "PENDING":
       return "bg-amber-50 text-amber-700";
+
     case "FAILED":
       return "bg-red-50 text-red-700";
+
     case "REFUNDED":
       return "bg-blue-50 text-blue-700";
+
     default:
       return "bg-zinc-100 text-zinc-700";
   }
 }
 
-function attemptStatusClass(outcome: string) {
+function attemptStatusClass(outcome: string): string {
   return outcome.toUpperCase() === "SUCCESS"
     ? "bg-emerald-50 text-emerald-700"
     : "bg-red-50 text-red-700";
 }
 
-function formatAttemptDate(value: string) {
+function formatAttemptDate(value: string): string {
+  const date = new Date(value);
+
+  if (Number.isNaN(date.getTime())) {
+    return value;
+  }
+
   return new Intl.DateTimeFormat("en-KR", {
     dateStyle: "medium",
     timeStyle: "short",
-  }).format(new Date(value));
+  }).format(date);
+}
+
+function getErrorMessage(
+  data: unknown,
+  fallback: string
+): string {
+  if (data === null || typeof data !== "object") {
+    return fallback;
+  }
+
+  const errorData = data as ApiErrorResponse;
+
+  if (
+    typeof errorData.message === "string" &&
+    errorData.message.trim()
+  ) {
+    return errorData.message;
+  }
+
+  if (
+    typeof errorData.detail === "string" &&
+    errorData.detail.trim()
+  ) {
+    return errorData.detail;
+  }
+
+  if (
+    typeof errorData.error === "string" &&
+    errorData.error.trim()
+  ) {
+    return errorData.error;
+  }
+
+  return fallback;
+}
+
+function isPayment(value: unknown): value is Payment {
+  if (value === null || typeof value !== "object") {
+    return false;
+  }
+
+  const data = value as Record<string, unknown>;
+
+  return (
+    typeof data.id === "number" &&
+    typeof data.amount === "number" &&
+    typeof data.status === "string"
+  );
 }
 
 export function PaymentSimulator({
@@ -51,17 +115,26 @@ export function PaymentSimulator({
 
   const [error, setError] = useState<string | null>(null);
 
+  const submittingRef = useRef(false);
+
   const isTossPayment = Boolean(payment.tossOrderId);
+
+  const normalizedStatus = payment.status.toUpperCase();
 
   const canAttemptPayment =
     !isTossPayment &&
-    (payment.status === "PENDING" ||
-      payment.status === "FAILED");
+    (normalizedStatus === "PENDING" ||
+      normalizedStatus === "FAILED");
 
   async function simulate(outcome: PaymentOutcome) {
-    if (submitting || !canAttemptPayment) {
+    if (
+      submittingRef.current ||
+      !canAttemptPayment
+    ) {
       return;
     }
+
+    submittingRef.current = true;
 
     setSubmitting(outcome);
     setError(null);
@@ -74,42 +147,80 @@ export function PaymentSimulator({
           headers: {
             "Content-Type": "application/json",
           },
-          body: JSON.stringify({ outcome }),
+          body: JSON.stringify({
+            outcome,
+          }),
+          cache: "no-store",
         }
       );
 
-      const data: unknown = await response.json();
+      const data: unknown = await response
+        .json()
+        .catch(() => null);
 
-      if (!response.ok) {
-        const errorData =
-          data !== null && typeof data === "object"
-            ? (data as {
-                message?: string;
-                detail?: string;
-              })
-            : {};
-
+      if (response.status === 401) {
         throw new Error(
-          errorData.message ||
-            errorData.detail ||
-            "Unable to process payment."
+          "Your session has expired. Please sign in again."
         );
       }
 
-      onPaymentUpdated(data as Payment);
+      if (response.status === 403) {
+        throw new Error(
+          getErrorMessage(
+            data,
+            "Simulated payments are disabled on this server."
+          )
+        );
+      }
+
+      if (response.status === 409) {
+        throw new Error(
+          getErrorMessage(
+            data,
+            "This payment can no longer be simulated. Please refresh the order."
+          )
+        );
+      }
+
+      if (!response.ok) {
+        throw new Error(
+          getErrorMessage(
+            data,
+            "Unable to process simulated payment."
+          )
+        );
+      }
+
+      if (!isPayment(data)) {
+        throw new Error(
+          "The server returned an invalid payment response."
+        );
+      }
+
+      // Update the parent component with the latest payment.
+      onPaymentUpdated(data);
+
     } catch (err) {
+      console.error(
+        "[PaymentSimulator] Payment simulation failed:",
+        err
+      );
+
       setError(
         err instanceof Error
           ? err.message
-          : "Payment simulation failed."
+          : "Payment simulation failed. Please try again."
       );
+
     } finally {
+      submittingRef.current = false;
       setSubmitting(null);
     }
   }
 
   return (
     <section className="min-w-0 rounded-2xl border border-zinc-200 bg-white p-4 sm:p-6">
+      {/* Header */}
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
           <p className="text-xs font-semibold uppercase tracking-[0.14em] text-zinc-500">
@@ -131,6 +242,7 @@ export function PaymentSimulator({
       </div>
 
       <div className="mt-6 space-y-4">
+        {/* Payment amount */}
         <div className="flex items-center justify-between gap-4">
           <span className="text-sm text-zinc-500">
             Amount
@@ -141,6 +253,7 @@ export function PaymentSimulator({
           </span>
         </div>
 
+        {/* Transaction reference */}
         {payment.transactionReference && (
           <div className="border-t border-zinc-200 pt-4">
             <p className="text-xs font-medium text-zinc-500 sm:text-sm">
@@ -153,9 +266,10 @@ export function PaymentSimulator({
           </div>
         )}
 
+        {/* Toss Payments information */}
         {isTossPayment &&
-          (payment.status === "PENDING" ||
-            payment.status === "FAILED") && (
+          (normalizedStatus === "PENDING" ||
+            normalizedStatus === "FAILED") && (
             <div className="border-t border-zinc-200 pt-5">
               <div className="rounded-xl border border-blue-100 bg-blue-50 p-4">
                 <p className="text-sm font-semibold text-blue-900">
@@ -177,20 +291,25 @@ export function PaymentSimulator({
             </div>
           )}
 
+        {/* Payment simulator */}
         {canAttemptPayment && (
           <div className="border-t border-zinc-200 pt-5">
             <div className="rounded-xl bg-amber-50 p-3.5">
               <p className="text-xs leading-5 text-amber-800 sm:text-sm sm:leading-6">
-                {payment.status === "FAILED"
+                {normalizedStatus === "FAILED"
                   ? "Your previous payment attempt failed. You can try again. This is a simulation; no real money will be charged."
                   : "This is a simulated payment. No real money will be charged."}
               </p>
             </div>
 
             <div className="mt-4 grid gap-3">
+              {/* Simulate success */}
               <button
                 type="button"
-                disabled={submitting !== null}
+                disabled={
+                  submitting !== null ||
+                  !canAttemptPayment
+                }
                 onClick={() => void simulate("SUCCESS")}
                 className="min-h-12 w-full rounded-xl bg-zinc-950 px-4 py-3 text-sm font-semibold text-white transition hover:bg-zinc-800 disabled:cursor-not-allowed disabled:opacity-50"
               >
@@ -199,9 +318,13 @@ export function PaymentSimulator({
                   : "Simulate successful payment"}
               </button>
 
+              {/* Simulate failure */}
               <button
                 type="button"
-                disabled={submitting !== null}
+                disabled={
+                  submitting !== null ||
+                  !canAttemptPayment
+                }
                 onClick={() => void simulate("FAILURE")}
                 className="min-h-12 w-full rounded-xl border border-zinc-200 px-4 py-3 text-sm font-semibold text-zinc-700 transition hover:bg-zinc-50 disabled:cursor-not-allowed disabled:opacity-50"
               >
@@ -213,6 +336,7 @@ export function PaymentSimulator({
           </div>
         )}
 
+        {/* Error messages */}
         {error && (
           <p
             role="alert"
@@ -222,6 +346,7 @@ export function PaymentSimulator({
           </p>
         )}
 
+        {/* Payment history */}
         {payment.attempts?.length > 0 && (
           <div className="border-t border-zinc-200 pt-5">
             <div className="flex items-center justify-between gap-3">
