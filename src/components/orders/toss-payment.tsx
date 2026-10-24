@@ -56,6 +56,13 @@ export function TossPayment({
 
   const submittingRef = useRef(false);
 
+  // NEXT_PUBLIC_ environment variables are embedded at build time.
+  // The production deployment must be rebuilt after configuring this key.
+  const tossClientKey =
+    process.env.NEXT_PUBLIC_TOSS_CLIENT_KEY?.trim() ?? "";
+
+  const isTossConfigured = tossClientKey.length > 0;
+
   async function requestJson(
     url: string,
     options?: RequestInit
@@ -150,8 +157,7 @@ export function TossPayment({
     return validatePreparation(data);
   }
 
-  async function getPaymentStatus():
-    Promise<TossPaymentStatusResponse> {
+  async function getPaymentStatus(): Promise<TossPaymentStatusResponse> {
     const { response, data } = await requestJson(
       `/api/orders/${orderId}/payment/toss/status`
     );
@@ -227,19 +233,19 @@ export function TossPayment({
     setError(null);
 
     try {
-      const clientKey =
-        process.env.NEXT_PUBLIC_TOSS_CLIENT_KEY;
-
-      if (!clientKey) {
+      if (!isTossConfigured) {
         throw new Error(
-          "Toss Payments client key is not configured."
+          "Toss Payments is not configured for this deployment. " +
+            "Set NEXT_PUBLIC_TOSS_CLIENT_KEY in Vercel's Production environment " +
+            "and redeploy the frontend."
         );
       }
 
-      // Verify the current Toss payment before starting checkout.
+      // Verify the existing Toss payment state before checkout.
       const prepared = await resolvePayment();
 
-      const tossPayments = await loadTossPayments(clientKey);
+      // Initialize the Toss Payments SDK.
+      const tossPayments = await loadTossPayments(tossClientKey);
 
       const payment = tossPayments.payment({
         customerKey: "ANONYMOUS",
@@ -338,9 +344,10 @@ export function TossPayment({
       </div>
 
       <div className="space-y-3">
+        {/* Credit / Debit Card */}
         <button
           type="button"
-          disabled={loading}
+          disabled={loading || !isTossConfigured}
           onClick={() => setMethod("CARD")}
           aria-pressed={method === "CARD"}
           className={`flex w-full items-center gap-3 rounded-xl border p-4 text-left transition disabled:cursor-not-allowed disabled:opacity-60 ${
@@ -371,9 +378,10 @@ export function TossPayment({
           />
         </button>
 
+        {/* Toss Pay */}
         <button
           type="button"
-          disabled={loading}
+          disabled={loading || !isTossConfigured}
           onClick={() => setMethod("TOSSPAY")}
           aria-pressed={method === "TOSSPAY"}
           className={`flex w-full items-center gap-3 rounded-xl border p-4 text-left transition disabled:cursor-not-allowed disabled:opacity-60 ${
@@ -405,6 +413,19 @@ export function TossPayment({
         </button>
       </div>
 
+      {/* Missing Toss client key */}
+      {!isTossConfigured && (
+        <p
+          role="alert"
+          className="mt-4 rounded-xl bg-red-50 p-3 text-sm text-red-700"
+        >
+          Toss Payments is not configured for this deployment.
+          Please add NEXT_PUBLIC_TOSS_CLIENT_KEY to the Vercel
+          Production environment and redeploy.
+        </p>
+      )}
+
+      {/* Payment errors */}
       {error && (
         <p
           role="alert"
@@ -414,15 +435,18 @@ export function TossPayment({
         </p>
       )}
 
+      {/* Pay button */}
       <button
         type="button"
-        disabled={loading}
+        disabled={loading || !isTossConfigured}
         onClick={() => void handlePayment()}
         className="mt-6 min-h-12 w-full rounded-xl bg-zinc-950 px-5 py-3 font-semibold text-white transition hover:bg-zinc-800 disabled:cursor-not-allowed disabled:opacity-50"
       >
-        {loading
-          ? "Verifying payment..."
-          : `Pay ${formatKRW(amount)}`}
+        {!isTossConfigured
+          ? "Payment unavailable"
+          : loading
+            ? "Verifying payment..."
+            : `Pay ${formatKRW(amount)}`}
       </button>
 
       <p className="mt-3 text-center text-xs text-zinc-500">
