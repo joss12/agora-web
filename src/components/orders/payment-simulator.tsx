@@ -16,16 +16,12 @@ type PaymentOutcome = "SUCCESS" | "FAILURE";
 interface DemoPaymentResponse {
   orderId: number;
   amount: number;
-  status:
-    | "PAID"
-    | "FAILED"
-    | "SIMULATED_SUCCESS"
-    | "SIMULATED_FAILURE";
+  status: "PAID" | "FAILED";
   outcome: PaymentOutcome;
   transactionReference: string;
   provider: "DEMO";
   demo: true;
-  persisted: boolean;
+  persisted: true;
   createdAt: string;
   message: string;
 }
@@ -40,16 +36,12 @@ function paymentStatusClass(status: string): string {
   switch (status.toUpperCase()) {
     case "PAID":
       return "bg-emerald-50 text-emerald-700";
-
     case "PENDING":
       return "bg-amber-50 text-amber-700";
-
     case "FAILED":
       return "bg-red-50 text-red-700";
-
     case "REFUNDED":
       return "bg-blue-50 text-blue-700";
-
     default:
       return "bg-zinc-100 text-zinc-700";
   }
@@ -72,29 +64,20 @@ function getErrorMessage(data: unknown): string {
   if (data && typeof data === "object") {
     const error = data as ApiError;
 
-    if (
-      typeof error.message === "string" &&
-      error.message.trim()
-    ) {
+    if (typeof error.message === "string" && error.message.trim()) {
       return error.message;
     }
 
-    if (
-      typeof error.detail === "string" &&
-      error.detail.trim()
-    ) {
+    if (typeof error.detail === "string" && error.detail.trim()) {
       return error.detail;
     }
 
-    if (
-      typeof error.error === "string" &&
-      error.error.trim()
-    ) {
+    if (typeof error.error === "string" && error.error.trim()) {
       return error.error;
     }
   }
 
-  return "Unable to process payment simulation.";
+  return "Unable to process payment.";
 }
 
 function isDemoPaymentResponse(
@@ -108,17 +91,12 @@ function isDemoPaymentResponse(
 
   return (
     data.demo === true &&
+    data.persisted === true &&
     data.provider === "DEMO" &&
-    typeof data.persisted === "boolean" &&
+    (data.status === "PAID" || data.status === "FAILED") &&
     typeof data.transactionReference === "string" &&
-    typeof data.message === "string" &&
     typeof data.createdAt === "string" &&
-    (
-      data.status === "PAID" ||
-      data.status === "FAILED" ||
-      data.status === "SIMULATED_SUCCESS" ||
-      data.status === "SIMULATED_FAILURE"
-    )
+    typeof data.message === "string"
   );
 }
 
@@ -160,10 +138,8 @@ export function PaymentSimulator({
   const canSimulate =
     !isTossPayment &&
     !isAlreadyPaid &&
-    (
-      normalizedStatus === "PENDING" ||
-      normalizedStatus === "FAILED"
-    );
+    (normalizedStatus === "PENDING" ||
+      normalizedStatus === "FAILED");
 
   async function refreshPayment(): Promise<void> {
     const response = await fetch(
@@ -194,15 +170,11 @@ export function PaymentSimulator({
   async function simulate(
     outcome: PaymentOutcome
   ): Promise<void> {
-    if (
-      submittingRef.current ||
-      !canSimulate
-    ) {
+    if (submittingRef.current || !canSimulate) {
       return;
     }
 
     submittingRef.current = true;
-
     setSubmitting(outcome);
     setError(null);
     setDemoResult(null);
@@ -227,7 +199,6 @@ export function PaymentSimulator({
       if (response.status === 401) {
         window.location.href =
           `/login?next=/orders/${orderId}`;
-
         return;
       }
 
@@ -237,16 +208,15 @@ export function PaymentSimulator({
 
       if (!isDemoPaymentResponse(data)) {
         throw new Error(
-          "Invalid demo payment response."
+          "The server did not confirm that the demo payment was saved."
         );
       }
 
       setDemoResult(data);
 
-      // Read the actual persisted payment state.
-      // Never trust a demo response as proof of real payment.
+      // Refresh the real database-backed payment.
+      // This also refreshes the parent order component.
       await refreshPayment();
-
     } catch (err) {
       setError(
         err instanceof Error
@@ -260,13 +230,14 @@ export function PaymentSimulator({
   }
 
   const demoSucceeded =
-    demoResult?.outcome === "SUCCESS";
+    demoResult?.status === "PAID";
+
+  const isDemoPayment =
+    payment.transactionReference?.startsWith("DEMO-") ??
+    false;
 
   return (
     <section className="min-w-0 rounded-2xl border border-zinc-200 bg-white p-4 sm:p-6">
-
-      {/* HEADER */}
-
       <div className="flex items-start justify-between gap-3">
         <div>
           <p className="text-xs font-semibold uppercase tracking-wider text-zinc-500">
@@ -287,8 +258,6 @@ export function PaymentSimulator({
         </span>
       </div>
 
-      {/* AMOUNT */}
-
       <div className="mt-6 flex items-center justify-between">
         <span className="text-sm text-zinc-500">
           Amount
@@ -298,8 +267,6 @@ export function PaymentSimulator({
           {formatKRW(payment.amount)}
         </span>
       </div>
-
-      {/* TRANSACTION REFERENCE */}
 
       {payment.transactionReference && (
         <div className="mt-5 border-t border-zinc-200 pt-4">
@@ -313,22 +280,25 @@ export function PaymentSimulator({
         </div>
       )}
 
-      {/* COMPLETED PAYMENT */}
-
       {isAlreadyPaid && (
         <div className="mt-6 rounded-xl border border-emerald-200 bg-emerald-50 p-4">
           <p className="font-semibold text-emerald-900">
-            Payment completed
+            {isDemoPayment
+              ? "Demo payment completed"
+              : "Payment completed"}
           </p>
 
           <p className="mt-2 text-sm leading-6 text-emerald-800">
-            This order has already been marked as paid.
+            {isDemoPayment
+              ? "This simulated payment has been recorded. No real money was charged."
+              : "This order has already been paid."}
+          </p>
+
+          <p className="mt-2 text-sm font-medium text-emerald-900">
             You do not need to pay again.
           </p>
         </div>
       )}
-
-      {/* TOSS PAYMENT */}
 
       {isTossPayment && !isAlreadyPaid && (
         <div className="mt-6 rounded-xl bg-blue-50 p-4">
@@ -338,35 +308,29 @@ export function PaymentSimulator({
 
           <p className="mt-2 text-sm leading-6 text-blue-800">
             This order is associated with Toss Payments.
-            Complete or resolve the existing payment
-            before attempting another payment.
+            Complete or resolve the existing Toss payment.
           </p>
         </div>
       )}
 
-      {/* DEMO SIMULATOR */}
-
       {canSimulate && (
         <div className="mt-6 border-t border-zinc-200 pt-5">
-
           <div className="rounded-xl border border-amber-200 bg-amber-50 p-4">
             <p className="font-semibold text-amber-900">
               Demo payment simulator
             </p>
 
             <p className="mt-2 text-sm leading-6 text-amber-800">
-              Test successful and failed payment responses
-              without spending money.
+              Test successful and failed payments without
+              spending money.
             </p>
 
             <p className="mt-2 text-sm font-medium text-amber-900">
-              Demo payments do not represent real money
-              received.
+              For development and testing only.
             </p>
           </div>
 
           <div className="mt-4 grid gap-3">
-
             <button
               type="button"
               disabled={submitting !== null}
@@ -388,12 +352,9 @@ export function PaymentSimulator({
                 ? "Processing..."
                 : "Simulate failed payment"}
             </button>
-
           </div>
         </div>
       )}
-
-      {/* ERROR */}
 
       {error && (
         <div
@@ -403,8 +364,6 @@ export function PaymentSimulator({
           {error}
         </div>
       )}
-
-      {/* DEMO RESULT */}
 
       {demoResult && (
         <div
@@ -450,8 +409,6 @@ export function PaymentSimulator({
         </div>
       )}
 
-      {/* PAYMENT ATTEMPTS */}
-
       {payment.attempts?.length > 0 && (
         <div className="mt-6 border-t border-zinc-200 pt-5">
           <h3 className="font-semibold">
@@ -484,12 +441,9 @@ export function PaymentSimulator({
           </div>
         </div>
       )}
-
     </section>
   );
 }
-
-
 
 
 
