@@ -8,7 +8,7 @@ interface RouteContext {
   }>;
 }
 
-interface SimulatePaymentBody {
+interface DemoPaymentBody {
   outcome: "SUCCESS" | "FAILURE";
 }
 
@@ -21,7 +21,7 @@ interface BackendError {
 
 function isValidPaymentBody(
   value: unknown
-): value is SimulatePaymentBody {
+): value is DemoPaymentBody {
   if (
     typeof value !== "object" ||
     value === null ||
@@ -42,37 +42,41 @@ export async function POST(
 ) {
   const { id } = await context.params;
 
+  // Validate order ID
   if (!/^[1-9]\d*$/.test(id)) {
     return NextResponse.json(
-      { message: "Invalid order ID" },
+      { message: "Invalid order ID." },
       { status: 400 }
     );
   }
 
+  // Parse request body
   let body: unknown;
 
   try {
     body = await request.json();
   } catch {
     return NextResponse.json(
-      { message: "Invalid JSON body" },
+      { message: "Invalid JSON body." },
       { status: 400 }
     );
   }
 
+  // Validate payment outcome
   if (!isValidPaymentBody(body)) {
     return NextResponse.json(
       {
         message:
-          "Payment outcome must be SUCCESS or FAILURE",
+          "Payment outcome must be SUCCESS or FAILURE.",
       },
       { status: 400 }
     );
   }
 
   try {
+    // Forward request to Spring Boot
     const response = await backendFetch(
-      `/api/orders/${id}/payment/simulate`,
+      `/api/orders/${id}/payment/demo`,
       {
         method: "POST",
         body: JSON.stringify({
@@ -81,6 +85,7 @@ export async function POST(
       }
     );
 
+    // Handle empty response
     if (response.status === 204) {
       return new NextResponse(null, {
         status: 204,
@@ -91,6 +96,7 @@ export async function POST(
       .json()
       .catch(() => null);
 
+    // Handle backend errors
     if (!response.ok) {
       const backendError: BackendError =
         data !== null && typeof data === "object"
@@ -110,7 +116,7 @@ export async function POST(
 
           case 403:
             message =
-              "Simulated payments are disabled in this environment.";
+              "You do not have permission to simulate this payment.";
             break;
 
           case 404:
@@ -120,12 +126,12 @@ export async function POST(
 
           case 409:
             message =
-              "Payment cannot be simulated for this order. If Toss Payments was started, complete or resolve that payment first.";
+              "This order is not eligible for demo payments. It may already be paid or associated with Toss Payments.";
             break;
 
           default:
             message =
-              "Unable to process payment. Please try again.";
+              "Unable to simulate payment. Please try again.";
         }
       }
 
@@ -135,14 +141,21 @@ export async function POST(
       );
     }
 
+    // Return demo payment result
     return NextResponse.json(data, {
       status: response.status,
     });
-  } catch {
+
+  } catch (error) {
+    console.error(
+      "[DemoPaymentAPI] Request failed:",
+      error
+    );
+
     return NextResponse.json(
       {
         message:
-          "Unable to reach the payment service.",
+          "Unable to reach the demo payment service.",
       },
       { status: 502 }
     );
