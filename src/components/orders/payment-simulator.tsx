@@ -16,12 +16,16 @@ type PaymentOutcome = "SUCCESS" | "FAILURE";
 interface DemoPaymentResponse {
   orderId: number;
   amount: number;
-  status: "PAID" | "FAILED";
+  status:
+    | "PAID"
+    | "FAILED"
+    | "SIMULATED_SUCCESS"
+    | "SIMULATED_FAILURE";
   outcome: PaymentOutcome;
   transactionReference: string;
   provider: "DEMO";
   demo: true;
-  persisted: false;
+  persisted: boolean;
   createdAt: string;
   message: string;
 }
@@ -29,6 +33,7 @@ interface DemoPaymentResponse {
 interface ApiError {
   message?: string;
   detail?: string;
+  error?: string;
 }
 
 function paymentStatusClass(status: string): string {
@@ -67,16 +72,29 @@ function getErrorMessage(data: unknown): string {
   if (data && typeof data === "object") {
     const error = data as ApiError;
 
-    if (typeof error.message === "string") {
+    if (
+      typeof error.message === "string" &&
+      error.message.trim()
+    ) {
       return error.message;
     }
 
-    if (typeof error.detail === "string") {
+    if (
+      typeof error.detail === "string" &&
+      error.detail.trim()
+    ) {
       return error.detail;
+    }
+
+    if (
+      typeof error.error === "string" &&
+      error.error.trim()
+    ) {
+      return error.error;
     }
   }
 
-  return "Unable to simulate payment.";
+  return "Unable to process payment simulation.";
 }
 
 function isDemoPaymentResponse(
@@ -90,17 +108,38 @@ function isDemoPaymentResponse(
 
   return (
     data.demo === true &&
-    data.persisted === false &&
     data.provider === "DEMO" &&
+    typeof data.persisted === "boolean" &&
     typeof data.transactionReference === "string" &&
     typeof data.message === "string" &&
-    (data.status === "PAID" || data.status === "FAILED")
+    typeof data.createdAt === "string" &&
+    (
+      data.status === "PAID" ||
+      data.status === "FAILED" ||
+      data.status === "SIMULATED_SUCCESS" ||
+      data.status === "SIMULATED_FAILURE"
+    )
+  );
+}
+
+function isPayment(value: unknown): value is Payment {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+
+  const data = value as Record<string, unknown>;
+
+  return (
+    typeof data.id === "number" &&
+    typeof data.status === "string" &&
+    typeof data.amount === "number"
   );
 }
 
 export function PaymentSimulator({
   orderId,
   payment,
+  onPaymentUpdated,
 }: PaymentSimulatorProps) {
   const [submitting, setSubmitting] =
     useState<PaymentOutcome | null>(null);
@@ -116,13 +155,49 @@ export function PaymentSimulator({
 
   const isTossPayment = Boolean(payment.tossOrderId);
 
+  const isAlreadyPaid = normalizedStatus === "PAID";
+
   const canSimulate =
     !isTossPayment &&
-    (normalizedStatus === "PENDING" ||
-      normalizedStatus === "FAILED");
+    !isAlreadyPaid &&
+    (
+      normalizedStatus === "PENDING" ||
+      normalizedStatus === "FAILED"
+    );
 
-  async function simulate(outcome: PaymentOutcome) {
-    if (submittingRef.current || !canSimulate) {
+  async function refreshPayment(): Promise<void> {
+    const response = await fetch(
+      `/api/orders/${orderId}/payment`,
+      {
+        method: "GET",
+        cache: "no-store",
+      }
+    );
+
+    if (!response.ok) {
+      throw new Error(
+        "Unable to refresh payment information."
+      );
+    }
+
+    const data: unknown = await response.json();
+
+    if (!isPayment(data)) {
+      throw new Error(
+        "The server returned invalid payment information."
+      );
+    }
+
+    onPaymentUpdated(data);
+  }
+
+  async function simulate(
+    outcome: PaymentOutcome
+  ): Promise<void> {
+    if (
+      submittingRef.current ||
+      !canSimulate
+    ) {
       return;
     }
 
@@ -149,6 +224,13 @@ export function PaymentSimulator({
         .json()
         .catch(() => null);
 
+      if (response.status === 401) {
+        window.location.href =
+          `/login?next=/orders/${orderId}`;
+
+        return;
+      }
+
       if (!response.ok) {
         throw new Error(getErrorMessage(data));
       }
@@ -160,6 +242,11 @@ export function PaymentSimulator({
       }
 
       setDemoResult(data);
+
+      // Read the actual persisted payment state.
+      // Never trust a demo response as proof of real payment.
+      await refreshPayment();
+
     } catch (err) {
       setError(
         err instanceof Error
@@ -172,8 +259,14 @@ export function PaymentSimulator({
     }
   }
 
+  const demoSucceeded =
+    demoResult?.outcome === "SUCCESS";
+
   return (
     <section className="min-w-0 rounded-2xl border border-zinc-200 bg-white p-4 sm:p-6">
+
+      {/* HEADER */}
+
       <div className="flex items-start justify-between gap-3">
         <div>
           <p className="text-xs font-semibold uppercase tracking-wider text-zinc-500">
@@ -194,6 +287,8 @@ export function PaymentSimulator({
         </span>
       </div>
 
+      {/* AMOUNT */}
+
       <div className="mt-6 flex items-center justify-between">
         <span className="text-sm text-zinc-500">
           Amount
@@ -204,10 +299,12 @@ export function PaymentSimulator({
         </span>
       </div>
 
+      {/* TRANSACTION REFERENCE */}
+
       {payment.transactionReference && (
         <div className="mt-5 border-t border-zinc-200 pt-4">
           <p className="text-sm text-zinc-500">
-            Real transaction reference
+            Transaction reference
           </p>
 
           <p className="mt-2 break-all text-sm">
@@ -216,43 +313,65 @@ export function PaymentSimulator({
         </div>
       )}
 
-      {isTossPayment && (
+      {/* COMPLETED PAYMENT */}
+
+      {isAlreadyPaid && (
+        <div className="mt-6 rounded-xl border border-emerald-200 bg-emerald-50 p-4">
+          <p className="font-semibold text-emerald-900">
+            Payment completed
+          </p>
+
+          <p className="mt-2 text-sm leading-6 text-emerald-800">
+            This order has already been marked as paid.
+            You do not need to pay again.
+          </p>
+        </div>
+      )}
+
+      {/* TOSS PAYMENT */}
+
+      {isTossPayment && !isAlreadyPaid && (
         <div className="mt-6 rounded-xl bg-blue-50 p-4">
           <p className="font-semibold text-blue-900">
             Toss Payments
           </p>
 
-          <p className="mt-2 text-sm text-blue-800">
+          <p className="mt-2 text-sm leading-6 text-blue-800">
             This order is associated with Toss Payments.
-            Complete or resolve the Toss payment normally.
+            Complete or resolve the existing payment
+            before attempting another payment.
           </p>
         </div>
       )}
 
+      {/* DEMO SIMULATOR */}
+
       {canSimulate && (
         <div className="mt-6 border-t border-zinc-200 pt-5">
+
           <div className="rounded-xl border border-amber-200 bg-amber-50 p-4">
             <p className="font-semibold text-amber-900">
               Demo payment simulator
             </p>
 
             <p className="mt-2 text-sm leading-6 text-amber-800">
-              Test successful and failed payments without
-              spending money.
+              Test successful and failed payment responses
+              without spending money.
             </p>
 
             <p className="mt-2 text-sm font-medium text-amber-900">
-              Demo results do not pay for this order or
-              authorize shipment.
+              Demo payments do not represent real money
+              received.
             </p>
           </div>
 
           <div className="mt-4 grid gap-3">
+
             <button
               type="button"
               disabled={submitting !== null}
               onClick={() => void simulate("SUCCESS")}
-              className="min-h-12 rounded-xl bg-zinc-950 px-4 py-3 text-sm font-semibold text-white hover:bg-zinc-800 disabled:opacity-50"
+              className="min-h-12 rounded-xl bg-zinc-950 px-4 py-3 text-sm font-semibold text-white transition hover:bg-zinc-800 disabled:cursor-not-allowed disabled:opacity-50"
             >
               {submitting === "SUCCESS"
                 ? "Processing..."
@@ -263,15 +382,18 @@ export function PaymentSimulator({
               type="button"
               disabled={submitting !== null}
               onClick={() => void simulate("FAILURE")}
-              className="min-h-12 rounded-xl border border-zinc-200 px-4 py-3 text-sm font-semibold text-zinc-700 hover:bg-zinc-50 disabled:opacity-50"
+              className="min-h-12 rounded-xl border border-zinc-200 px-4 py-3 text-sm font-semibold text-zinc-700 transition hover:bg-zinc-50 disabled:cursor-not-allowed disabled:opacity-50"
             >
               {submitting === "FAILURE"
                 ? "Processing..."
                 : "Simulate failed payment"}
             </button>
+
           </div>
         </div>
       )}
+
+      {/* ERROR */}
 
       {error && (
         <div
@@ -282,10 +404,12 @@ export function PaymentSimulator({
         </div>
       )}
 
+      {/* DEMO RESULT */}
+
       {demoResult && (
         <div
           className={`mt-5 rounded-xl border p-4 ${
-            demoResult.status === "PAID"
+            demoSucceeded
               ? "border-emerald-200 bg-emerald-50"
               : "border-red-200 bg-red-50"
           }`}
@@ -301,7 +425,7 @@ export function PaymentSimulator({
           </div>
 
           <p className="mt-3 text-lg font-semibold">
-            {demoResult.status === "PAID"
+            {demoSucceeded
               ? "Simulation successful"
               : "Simulation failed"}
           </p>
@@ -326,10 +450,12 @@ export function PaymentSimulator({
         </div>
       )}
 
+      {/* PAYMENT ATTEMPTS */}
+
       {payment.attempts?.length > 0 && (
         <div className="mt-6 border-t border-zinc-200 pt-5">
           <h3 className="font-semibold">
-            Real payment attempts
+            Payment attempts
           </h3>
 
           <div className="mt-4 space-y-3">
@@ -358,12 +484,10 @@ export function PaymentSimulator({
           </div>
         </div>
       )}
+
     </section>
   );
 }
-
-
-
 
 
 
