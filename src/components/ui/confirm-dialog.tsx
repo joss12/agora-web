@@ -42,9 +42,13 @@ export function ConfirmDialog({
       }}
     >
       <AlertDialog.Portal>
-        <AlertDialog.Overlay className="fixed inset-0 z-[100] bg-black/50 backdrop-blur-[3px] data-[state=open]:animate-in data-[state=closed]:animate-out" />
+        <AlertDialog.Overlay
+          className="fixed inset-0 z-[100] bg-black/50 backdrop-blur-[3px] data-[state=open]:animate-in data-[state=closed]:animate-out"
+        />
 
-        <AlertDialog.Content className="fixed left-1/2 top-1/2 z-[101] w-[calc(100%-32px)] max-w-md -translate-x-1/2 -translate-y-1/2 rounded-2xl border border-zinc-200 bg-white p-6 shadow-2xl outline-none sm:p-7">
+        <AlertDialog.Content
+          className="fixed left-1/2 top-1/2 z-[101] w-[calc(100%-32px)] max-w-md -translate-x-1/2 -translate-y-1/2 rounded-2xl border border-zinc-200 bg-white p-6 shadow-2xl outline-none sm:p-7"
+        >
           <div className="mb-5 flex items-start justify-between gap-4">
             <div
               className={`flex h-12 w-12 items-center justify-center rounded-2xl ${
@@ -106,7 +110,10 @@ export function ConfirmDialog({
                 }`}
               >
                 {loading && (
-                  <Loader2 size={16} className="animate-spin" />
+                  <Loader2
+                    size={16}
+                    className="animate-spin"
+                  />
                 )}
 
                 {loading ? "Please wait..." : confirmLabel}

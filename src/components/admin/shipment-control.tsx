@@ -13,6 +13,7 @@ import {
   Truck,
 } from "lucide-react";
 
+import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import type { OrderStatus } from "@/types/admin-order";
 import type { Shipment } from "@/types/shipment";
 
@@ -21,20 +22,15 @@ interface ShipmentControlProps {
   orderStatus: OrderStatus;
 }
 
-function formatDate(
-  value: string | null
-) {
+function formatDate(value: string | null) {
   if (!value) {
     return "—";
   }
 
-  return new Intl.DateTimeFormat(
-    "en-KR",
-    {
-      dateStyle: "medium",
-      timeStyle: "short",
-    }
-  ).format(new Date(value));
+  return new Intl.DateTimeFormat("en-KR", {
+    dateStyle: "medium",
+    timeStyle: "short",
+  }).format(new Date(value));
 }
 
 export function ShipmentControl({
@@ -65,67 +61,75 @@ export function ShipmentControl({
   const [submitting, setSubmitting] =
     useState(false);
 
+  const [confirmDeliveryOpen, setConfirmDeliveryOpen] =
+    useState(false);
+
   const [error, setError] =
     useState("");
 
-  const loadShipment =
-    useCallback(async () => {
-      if (
-        orderStatus !== "SHIPPED" &&
-        orderStatus !== "DELIVERED"
-      ) {
-        setLoadingShipment(false);
+  // =========================================================
+  // LOAD SHIPMENT
+  // =========================================================
+
+  const loadShipment = useCallback(async () => {
+    if (
+      orderStatus !== "SHIPPED" &&
+      orderStatus !== "DELIVERED"
+    ) {
+      setLoadingShipment(false);
+      return;
+    }
+
+    setLoadingShipment(true);
+    setError("");
+
+    try {
+      const response = await fetch(
+        `/api/admin/orders/${orderId}/shipment`,
+        {
+          method: "GET",
+          cache: "no-store",
+        }
+      );
+
+      if (response.status === 404) {
+        setShipment(null);
         return;
       }
 
-      setLoadingShipment(true);
-      setError("");
+      if (!response.ok) {
+        const data = await response
+          .json()
+          .catch(() => null);
 
-      try {
-        const response = await fetch(
-          `/api/admin/orders/${orderId}/shipment`,
-          {
-            method: "GET",
-            cache: "no-store",
-          }
+        throw new Error(
+          data?.message ??
+            "Unable to load shipment"
         );
-
-        if (
-          response.status === 404
-        ) {
-          setShipment(null);
-          return;
-        }
-
-        if (!response.ok) {
-          const data = await response
-            .json()
-            .catch(() => null);
-
-          throw new Error(
-            data?.message ??
-              "Unable to load shipment"
-          );
-        }
-
-        const data: Shipment =
-          await response.json();
-
-        setShipment(data);
-      } catch (err) {
-        setError(
-          err instanceof Error
-            ? err.message
-            : "Unable to load shipment"
-        );
-      } finally {
-        setLoadingShipment(false);
       }
-    }, [orderId, orderStatus]);
+
+      const data: Shipment =
+        await response.json();
+
+      setShipment(data);
+    } catch (err) {
+      setError(
+        err instanceof Error
+          ? err.message
+          : "Unable to load shipment"
+      );
+    } finally {
+      setLoadingShipment(false);
+    }
+  }, [orderId, orderStatus]);
 
   useEffect(() => {
     void loadShipment();
   }, [loadShipment]);
+
+  // =========================================================
+  // CREATE SHIPMENT
+  // =========================================================
 
   async function createShipment(
     event: FormEvent<HTMLFormElement>
@@ -143,16 +147,12 @@ export function ShipmentControl({
       trackingNumber.trim();
 
     if (!normalizedCarrier) {
-      setError(
-        "Carrier is required."
-      );
+      setError("Carrier is required.");
       return;
     }
 
     if (!normalizedTracking) {
-      setError(
-        "Tracking number is required."
-      );
+      setError("Tracking number is required.");
       return;
     }
 
@@ -165,14 +165,11 @@ export function ShipmentControl({
         {
           method: "POST",
           headers: {
-            "Content-Type":
-              "application/json",
+            "Content-Type": "application/json",
           },
           body: JSON.stringify({
-            carrier:
-              normalizedCarrier,
-            trackingNumber:
-              normalizedTracking,
+            carrier: normalizedCarrier,
+            trackingNumber: normalizedTracking,
           }),
         }
       );
@@ -188,9 +185,7 @@ export function ShipmentControl({
         );
       }
 
-      setShipment(
-        data as Shipment
-      );
+      setShipment(data as Shipment);
 
       setCarrier("");
       setTrackingNumber("");
@@ -207,17 +202,12 @@ export function ShipmentControl({
     }
   }
 
+  // =========================================================
+  // MARK AS DELIVERED
+  // =========================================================
+
   async function markDelivered() {
     if (submitting) {
-      return;
-    }
-
-    const confirmed =
-      window.confirm(
-        `Mark Order #${orderId} as delivered?`
-      );
-
-    if (!confirmed) {
       return;
     }
 
@@ -243,9 +233,10 @@ export function ShipmentControl({
         );
       }
 
-      setShipment(
-        data as Shipment
-      );
+      setShipment(data as Shipment);
+
+      // Close Agora's confirmation dialog only after success.
+      setConfirmDeliveryOpen(false);
 
       router.refresh();
     } catch (err) {
@@ -259,19 +250,22 @@ export function ShipmentControl({
     }
   }
 
-  if (orderStatus === "PLACED") {
-    return null;
-  }
+  // =========================================================
+  // HIDDEN STATES
+  // =========================================================
 
   if (
+    orderStatus === "PLACED" ||
     orderStatus === "CANCELLED"
   ) {
     return null;
   }
 
-  if (
-    orderStatus === "PROCESSING"
-  ) {
+  // =========================================================
+  // PROCESSING: CREATE SHIPMENT
+  // =========================================================
+
+  if (orderStatus === "PROCESSING") {
     return (
       <div className="mt-6 border-t border-zinc-200 pt-6">
         <div className="flex items-start gap-3">
@@ -309,9 +303,7 @@ export function ShipmentControl({
               type="text"
               value={carrier}
               onChange={(event) =>
-                setCarrier(
-                  event.target.value
-                )
+                setCarrier(event.target.value)
               }
               maxLength={100}
               placeholder="CJ Logistics"
@@ -333,9 +325,7 @@ export function ShipmentControl({
               type="text"
               value={trackingNumber}
               onChange={(event) =>
-                setTrackingNumber(
-                  event.target.value
-                )
+                setTrackingNumber(event.target.value)
               }
               maxLength={150}
               placeholder="123456789012"
@@ -366,6 +356,10 @@ export function ShipmentControl({
       </div>
     );
   }
+
+  // =========================================================
+  // SHIPPED / DELIVERED: SHIPMENT DETAILS
+  // =========================================================
 
   return (
     <div className="mt-6 border-t border-zinc-200 pt-6">
@@ -401,8 +395,7 @@ export function ShipmentControl({
 
               <span
                 className={`shrink-0 rounded-full px-2.5 py-1 text-[10px] font-semibold sm:px-3 sm:text-xs ${
-                  shipment.status ===
-                  "DELIVERED"
+                  shipment.status === "DELIVERED"
                     ? "bg-emerald-50 text-emerald-700"
                     : "bg-blue-50 text-blue-700"
                 }`}
@@ -417,9 +410,7 @@ export function ShipmentControl({
               </p>
 
               <p className="mt-1.5 break-all text-sm font-medium text-zinc-950">
-                {
-                  shipment.trackingNumber
-                }
+                {shipment.trackingNumber}
               </p>
             </div>
 
@@ -429,9 +420,7 @@ export function ShipmentControl({
               </p>
 
               <p className="mt-1 text-sm leading-5 text-zinc-800">
-                {formatDate(
-                  shipment.shippedAt
-                )}
+                {formatDate(shipment.shippedAt)}
               </p>
             </div>
 
@@ -442,25 +431,22 @@ export function ShipmentControl({
                 </p>
 
                 <p className="mt-1 text-sm leading-5 text-zinc-800">
-                  {formatDate(
-                    shipment.deliveredAt
-                  )}
+                  {formatDate(shipment.deliveredAt)}
                 </p>
               </div>
             )}
           </div>
 
-          {orderStatus ===
-            "SHIPPED" && (
+          {orderStatus === "SHIPPED" && (
             <button
               type="button"
-              onClick={markDelivered}
+              onClick={() =>
+                setConfirmDeliveryOpen(true)
+              }
               disabled={submitting}
               className="flex min-h-12 w-full items-center justify-center gap-2 rounded-xl bg-zinc-950 px-5 py-3 text-sm font-semibold text-white transition hover:bg-zinc-800 disabled:cursor-not-allowed disabled:opacity-40"
             >
-              <CheckCircle2
-                size={17}
-              />
+              <CheckCircle2 size={17} />
 
               {submitting
                 ? "Updating..."
@@ -483,6 +469,28 @@ export function ShipmentControl({
           {error}
         </p>
       )}
+
+      {/* AGORA CONFIRMATION DIALOG */}
+
+      <ConfirmDialog
+        open={confirmDeliveryOpen}
+        onOpenChange={setConfirmDeliveryOpen}
+        title="Confirm delivery"
+        description={
+          <>
+            Are you sure you want to mark{" "}
+            <span className="font-semibold text-zinc-900">
+              Order #{orderId}
+            </span>{" "}
+            as delivered?
+          </>
+        }
+        confirmLabel="Confirm delivery"
+        cancelLabel="Cancel"
+        variant="default"
+        loading={submitting}
+        onConfirm={markDelivered}
+      />
     </div>
   );
 }
